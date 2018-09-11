@@ -22,11 +22,16 @@ type Reader struct {
 	retry         uint
 	timeout       time.Duration
 	skipTLSVerify bool
+	userAgent     string
 }
 
 // NewReader creates a new remote reader with defaults
 func NewReader(options ...Option) *Reader {
-	r := &Reader{retry: 1, timeout: 5 * time.Second}
+	r := &Reader{
+		retry:     1,
+		timeout:   5 * time.Second,
+		userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.81 Safari/537.36", // nolint: lll
+	}
 	for _, option := range options {
 		option(r)
 	}
@@ -46,21 +51,16 @@ func Timeout(timeout time.Duration) Option {
 // SkipTLSVerify option for remote reader to skip TLS Certificate verification
 func SkipTLSVerify() Option { return func(r *Reader) { r.skipTLSVerify = true } }
 
+// UserAgent option for remote reader sets the user agent header string for the request
+func UserAgent(userAgent string) Option { return func(r *Reader) { r.userAgent = userAgent } }
+
 // Read returns response from given url with configured reader
 func (r *Reader) Read(url string) (*http.Response, error) {
-	client := &http.Client{Timeout: r.timeout}
-	if r.skipTLSVerify {
-		client.Transport = &http.Transport{
-			/* #nosec */
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-	}
-
 	var resp *http.Response
 	var err error
 	var i uint
 	for i = 0; i < r.retry; i++ {
-		if resp, err = client.Get(url); err == nil || !isTimeoutErr(err) {
+		if resp, err = r.get(url); err == nil || !isTimeoutErr(err) {
 			return resp, errors.Wrap(err, "can't get url")
 		}
 	}
@@ -92,6 +92,22 @@ func (r *Reader) JSON(url string, dest interface{}) error {
 		return errors.Errorf("Got %q: can't read given url %q", resp.Status, url)
 	}
 	return DecodeAsJSON(resp.Body, dest)
+}
+
+func (r *Reader) get(url string) (*http.Response, error) {
+	client := &http.Client{Timeout: r.timeout}
+	if r.skipTLSVerify {
+		client.Transport = &http.Transport{
+			/* #nosec */
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", r.userAgent)
+	return client.Do(req)
 }
 
 // isTimeoutErr checks if given error is a timeout
